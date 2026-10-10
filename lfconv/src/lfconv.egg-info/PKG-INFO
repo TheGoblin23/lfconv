@@ -1,0 +1,10 @@
+Metadata-Version: 2.4
+Name: lfconv
+Version: 0.1.0.dev0
+Summary: Convert files locally: no uploads, no accounts, no telemetry.
+Requires-Python: >=3.10
+Provides-Extra: image
+Requires-Dist: Pillow>=10.1; extra == "image"
+Provides-Extra: dev
+Requires-Dist: pytest>=7; extra == "dev"
+Requires-Dist: pypdf>=4; extra == "dev"

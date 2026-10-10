@@ -1,0 +1,7 @@
+
+[dev]
+pytest>=7
+pypdf>=4
+
+[image]
+Pillow>=10.1
