@@ -1,2 +1,5 @@
 [console_scripts]
 lfconv = lfconv.cli.main:main
+
+[gui_scripts]
+lfconv-gui = lfconv.gui:main

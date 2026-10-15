@@ -17,3 +17,8 @@ def format_from_path(path: str | os.PathLike[str]) -> str | None:
     """Guess the format from the file extension, or None if there is none."""
     suffix = os.path.splitext(os.fspath(path))[1].lstrip(".")
     return normalize_format(suffix) if suffix else None
+
+
+def extensions(fmt: str) -> list[str]:
+    """Every extension that means ``fmt``, aliases included: "jpg" -> ["jpg", "jpeg"]."""
+    return [fmt, *sorted(alias for alias, canonical in _ALIASES.items() if canonical == fmt)]

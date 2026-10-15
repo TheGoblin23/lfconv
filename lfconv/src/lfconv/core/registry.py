@@ -60,6 +60,10 @@ class Registry:
             return []
         return sorted(t for s, t in self._items if s == source)
 
+    def infos(self) -> list[ConverterInfo]:
+        """Every registered conversion, sorted by (source, target)."""
+        return [info for _, info in sorted(self._items.items())]
+
     def describe(self) -> list[dict[str, Any]]:
         """Registered conversions as plain data (JSON-serializable)."""
         return [
@@ -68,7 +72,7 @@ class Registry:
                 "target": info.target,
                 "options": [asdict(option) for option in info.options],
             }
-            for _, info in sorted(self._items.items())
+            for info in self.infos()
         ]
 
 

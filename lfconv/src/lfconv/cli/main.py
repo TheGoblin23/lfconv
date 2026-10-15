@@ -1,38 +1,22 @@
 import argparse
 import json
-import os
 import sys
 import time
 import traceback
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from ..converters import load_builtin_converters
-from ..core.api import can_convert, convert, describe_converters
-from ..core.errors import (
-    ConverterError,
-    InvalidFileError,
-    InvalidOptionError,
-    OutputError,
-    UnsupportedFormatError,
-)
-from ..core.formats import format_from_path, normalize_format
-from ..core.options import Option, validate_options
+from ..core.api import describe_converters
+from ..core.batch import Job, check_options, options_for_target, plan_jobs, run_job
+from ..core.errors import ConverterError, UnsupportedFormatError
+from ..core.formats import normalize_format
+from ..core.options import Option, choice_label, choice_value
 
 EXIT_OK = 0
 EXIT_FAILED = 1  # at least one file could not be converted
 EXIT_USAGE = 2  # invalid arguments or nothing to convert
 EXIT_INTERRUPTED = 130
-
-_TAB_ALIAS = "tab"
-
-
-@dataclass(frozen=True)
-class Job:
-    src: Path
-    dst: Path
-    error: ConverterError | None = None  # a problem found while planning
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -45,7 +29,7 @@ def main(argv: list[str] | None = None) -> int:
     early.add_argument("--to")
     early_args, _ = early.parse_known_args(argv)
     target = _try_normalize(early_args.to)
-    option_specs = _options_for_target(conversions, target) if target else []
+    option_specs = options_for_target(target) if target else []
 
     parser = _build_parser(option_specs)
     args = parser.parse_args(argv)
@@ -78,14 +62,14 @@ def _convert_files(
         return _usage_error(f"'{out_dir.name}' exists and is not a folder.", args.json)
 
     provided = {
-        spec.name: _cli_value(spec, getattr(args, f"opt_{spec.name}"))
+        spec.name: choice_value(spec, getattr(args, f"opt_{spec.name}"))
         for spec in option_specs
         if hasattr(args, f"opt_{spec.name}")
     }
-    jobs, skipped = _plan(args.inputs, target, out_dir)
+    jobs, skipped = plan_jobs(args.inputs, target, out_dir)
     if not jobs:
         return _usage_error("there are no files to convert.", args.json)
-    problem = _check_options(jobs, target, provided, conversions)
+    problem = check_options(jobs, target, provided)
     if problem:
         return _usage_error(problem, args.json)
 
@@ -98,10 +82,7 @@ def _convert_files(
         for index, job in enumerate(jobs, start=1):
             started = time.perf_counter()
             try:
-                if job.error:
-                    raise job.error
-                options = _options_for_job(job.src, target, provided, conversions)
-                convert(job.src, job.dst, options=options, overwrite=args.overwrite)
+                run_job(job, target, provided, args.overwrite)
             except Exception as exc:  # one bad file must not stop the batch
                 failed += 1
                 reporter.failed(index, len(jobs), job, exc)
@@ -115,103 +96,6 @@ def _convert_files(
     if interrupted:
         return EXIT_INTERRUPTED
     return EXIT_FAILED if failed else EXIT_OK
-
-
-# --- planning ---------------------------------------------------------------
-
-def _plan(inputs: list[str], target: str, out_dir: Path | None) -> tuple[list[Job], list[Path]]:
-    """Expand folders into files and decide every output path."""
-    jobs: list[Job] = []
-    skipped: list[Path] = []
-    claimed: set[str] = set()
-
-    def add(src: Path) -> None:
-        dst = (out_dir or src.parent) / f"{src.stem}.{target}"
-        key = os.path.normcase(os.path.abspath(dst))
-        error = None
-        if key in claimed:
-            error = OutputError(f"Another input in this run already writes '{dst.name}'.")
-        claimed.add(key)
-        jobs.append(Job(src, dst, error))
-
-    for raw in inputs:
-        path = Path(raw)
-        if not path.is_dir():
-            add(path)  # missing or unsupported files are reported by convert()
-            continue
-        try:
-            children = sorted(path.iterdir())
-        except OSError:
-            jobs.append(Job(path, path, InvalidFileError(f"'{path.name}' cannot be read.")))
-            continue
-        for child in children:
-            if child.name.startswith(".") or not child.is_file():
-                continue
-            source = format_from_path(child)
-            if source and can_convert(source, target):
-                add(child)
-            else:
-                skipped.append(child)
-    return jobs, skipped
-
-
-def _options_for_target(conversions: list[dict[str, Any]], target: str) -> list[Option]:
-    """Union of the options declared by every conversion that ends in ``target``."""
-    merged: dict[str, Option] = {}
-    for conversion in conversions:
-        if conversion["target"] != target:
-            continue
-        for raw in conversion["options"]:
-            spec = Option(**raw)
-            known = merged.get(spec.name)
-            if known is None:
-                merged[spec.name] = spec
-            elif known.choices and spec.choices:
-                extra = tuple(c for c in spec.choices if c not in known.choices)
-                merged[spec.name] = Option(**{**raw, "choices": known.choices + extra,
-                                              "default": known.default})
-    return list(merged.values())
-
-
-def _declared(conversions: list[dict[str, Any]], source: str | None, target: str) -> list[Option]:
-    for conversion in conversions:
-        if conversion["source"] == source and conversion["target"] == target:
-            return [Option(**raw) for raw in conversion["options"]]
-    return []
-
-
-def _options_for_job(
-    src: Path, target: str, provided: dict[str, Any], conversions: list[dict[str, Any]]
-) -> dict[str, Any]:
-    names = {spec.name for spec in _declared(conversions, format_from_path(src), target)}
-    return {name: value for name, value in provided.items() if name in names}
-
-
-def _check_options(
-    jobs: list[Job], target: str, provided: dict[str, Any], conversions: list[dict[str, Any]]
-) -> str | None:
-    """Validate options once, before converting anything."""
-    if not provided:
-        return None
-    used: set[str] = set()
-    sources = {format_from_path(job.src) for job in jobs if not job.error}
-    known_conversions = 0
-    for source in sources:
-        specs = _declared(conversions, source, target)
-        if not any(c["source"] == source and c["target"] == target for c in conversions):
-            continue
-        known_conversions += 1
-        chosen = {k: v for k, v in provided.items() if k in {s.name for s in specs}}
-        try:
-            validate_options(specs, chosen)
-        except InvalidOptionError as exc:
-            return str(exc)
-        used |= chosen.keys()
-    unused = sorted(set(provided) - used)
-    if known_conversions and unused:
-        flags = ", ".join("--" + name.replace("_", "-") for name in unused)
-        return f"{flags} does not apply to the files being converted."
-    return None
 
 
 # --- parser -------------------------------------------------------------------
@@ -242,9 +126,9 @@ def _build_parser(option_specs: list[Option]) -> argparse.ArgumentParser:
 
 
 def _add_option(group: Any, spec: Option) -> None:
-    detail = [f"default: {_show(spec.default)}"]
+    detail = [f"default: {choice_label(spec.default)}"]
     if spec.choices:
-        detail.append("one of: " + ", ".join(_show(c) for c in spec.choices))
+        detail.append("one of: " + ", ".join(choice_label(c) for c in spec.choices))
     if spec.min is not None or spec.max is not None:
         detail.append(f"range: {spec.min:g}-{spec.max:g}" if spec.min is not None and spec.max is not None
                       else f"min: {spec.min}" if spec.min is not None else f"max: {spec.max}")
@@ -259,16 +143,6 @@ def _add_option(group: Any, spec: Option) -> None:
         kwargs["type"] = {"int": int, "float": float, "str": str}[spec.kind]
         kwargs["metavar"] = spec.name.upper()
     group.add_argument("--" + spec.name.replace("_", "-"), **kwargs)
-
-
-def _cli_value(spec: Option, value: Any) -> Any:
-    if value == _TAB_ALIAS and spec.choices and "\t" in spec.choices:
-        return "\t"
-    return value
-
-
-def _show(value: Any) -> str:
-    return _TAB_ALIAS if value == "\t" else str(value)
 
 
 # --- output ---------------------------------------------------------------------

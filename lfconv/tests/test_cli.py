@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from lfconv import describe_converters
-from lfconv.cli import main as cli
+from lfconv.core import batch
 from lfconv.cli.main import main
 
 SRC_DIR = Path(__file__).resolve().parents[1] / "src"
@@ -205,7 +205,7 @@ def test_flags_of_other_formats_do_not_exist(tmp_path, capsys):
 def test_option_that_applies_to_no_input_is_a_usage_error(tmp_path, capsys):
     (tmp_path / "t.txt").write_text("hi", encoding="utf-8")
     code, _, err = run(capsys, tmp_path / "t.txt", "--to", "pdf", "--quality", 50)
-    assert code == 2 and "--quality does not apply" in err
+    assert code == 2 and "'quality' does not apply" in err
 
 
 def test_option_only_reaches_converters_that_declare_it(tmp_path, capsys):
@@ -272,7 +272,7 @@ def test_unexpected_errors_are_reported_without_a_traceback(tmp_path, capsys, mo
     def explode(*args, **kwargs):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(cli, "convert", explode)
+    monkeypatch.setattr(batch, "convert", explode)
     code, _, err = run(capsys, src, "--to", "json")
     assert code == 1 and "Unexpected error" in err and "boom" not in err
     code, out, _ = run(capsys, src, "--to", "json", "--json")
@@ -281,7 +281,7 @@ def test_unexpected_errors_are_reported_without_a_traceback(tmp_path, capsys, mo
 
 def test_ctrl_c_stops_cleanly_with_a_summary(tmp_path, capsys, monkeypatch):
     first, second = write_csv(tmp_path / "a.csv"), write_csv(tmp_path / "b.csv")
-    real_convert = cli.convert
+    real_convert = batch.convert
     calls = []
 
     def interrupt_second(*args, **kwargs):
@@ -290,7 +290,7 @@ def test_ctrl_c_stops_cleanly_with_a_summary(tmp_path, capsys, monkeypatch):
             raise KeyboardInterrupt
         return real_convert(*args, **kwargs)
 
-    monkeypatch.setattr(cli, "convert", interrupt_second)
+    monkeypatch.setattr(batch, "convert", interrupt_second)
     code, out, err = run(capsys, first, second, "--to", "json")
     assert code == 130 and "Interrupted" in err
     assert "Done: 1 converted, 0 failed." in out

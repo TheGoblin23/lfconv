@@ -12,6 +12,9 @@ dependencies = []
 [project.scripts]
 lfconv = "lfconv.cli.main:main"
 
+[project.gui-scripts]
+lfconv-gui = "lfconv.gui:main"
+
 [project.optional-dependencies]
 image = ["Pillow>=10.1"]
 dev = ["pytest>=7", "pypdf>=4"]

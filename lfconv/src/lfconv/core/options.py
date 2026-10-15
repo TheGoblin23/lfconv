@@ -70,3 +70,18 @@ def validate_options(
     if supplied:
         raise InvalidOptionError(f"Unknown option: {', '.join(sorted(supplied))}.")
     return resolved
+
+
+_TAB_LABEL = "tab"
+
+
+def choice_label(value: Any) -> str:
+    """How a choice is shown to people: a tab character is shown as "tab"."""
+    return _TAB_LABEL if value == "\t" else str(value)
+
+
+def choice_value(spec: Option, text: Any) -> Any:
+    """Inverse of ``choice_label``: turn what a person typed or picked into the value."""
+    if text == _TAB_LABEL and spec.choices and "\t" in spec.choices:
+        return "\t"
+    return text
